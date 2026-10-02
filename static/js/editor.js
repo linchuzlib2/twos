@@ -69,6 +69,13 @@ function createRichEditor(mount, options = {}) {
 
   function setStatus(t) { status.textContent = t || ''; }
 
+  /* 刷新内容里附件链接的旧令牌：/attk/<旧令牌>/<id>/... -> /attk/<当前令牌>/<id>/...
+     部署/改密码后令牌会变，旧内容里嵌的旧令牌会 401 */
+  function retoken(html) {
+    const tk = window.ATT_TOKEN || '0';
+    return String(html || '').replace(/\/attk\/[^/?#"'\\\s]+\/(\d+)/g, `/attk/${tk}/$1`);
+  }
+
   function insertHTML(html) {
     content.focus();
     document.execCommand('insertHTML', false, html);
@@ -116,7 +123,7 @@ function createRichEditor(mount, options = {}) {
 
   return {
     getHTML: () => content.innerHTML,
-    setHTML: html => { content.innerHTML = html || ''; },
+    setHTML: html => { content.innerHTML = retoken(html); },
     focus: () => content.focus(),
     insertHTML,
     uploadAndInsert,
