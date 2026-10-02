@@ -65,6 +65,20 @@
   </div>
 </div>
 
+<div class="modal-mask hidden" id="textAttachmentModal">
+  <div class="modal text-attachment-modal">
+    <div class="modal-head">
+      <span id="textAttachmentTitle">在线编辑附件</span>
+      <button class="icon-btn" id="textAttachmentClose" title="关闭">✕</button>
+    </div>
+    <textarea id="textAttachmentContent" class="text-attachment-content" spellcheck="false" disabled></textarea>
+    <div class="modal-foot text-attachment-foot">
+      <span id="textAttachmentStatus" role="status"></span>
+      <button class="primary" id="textAttachmentSave" disabled>保存附件</button>
+    </div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
 <script src="/static/js/editor.js"></script>

@@ -228,6 +228,16 @@ input, select, textarea { font: inherit; }
   background: var(--card);
 }
 .modal-foot { display: flex; justify-content: space-between; margin-top: 16px; }
+.text-attachment-modal { width: 900px; }
+.text-attachment-content {
+  width: 100%; min-height: 60vh; resize: vertical; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg); color: var(--text);
+  font: 13px/1.5 Consolas, "Courier New", monospace;
+}
+.text-attachment-content:focus { outline: 2px solid var(--accent); }
+.text-attachment-foot { align-items: center; gap: 12px; }
+.text-attachment-foot span { color: var(--muted); font-size: 13px; }
 
 /* ============ 富文本编辑器 ============ */
 .re-toolbar {

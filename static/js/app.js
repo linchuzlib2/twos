@@ -583,8 +583,13 @@ async function init() {
     location.href = '/login';
   };
   $('#editorClose').onclick = closeEditor;
+  $('#textAttachmentClose').onclick = closeTextAttachment;
+  $('#textAttachmentSave').onclick = saveTextAttachment;
   $('#editorModal').addEventListener('mousedown', e => {
     if (e.target === e.currentTarget) closeEditor();
+  });
+  $('#textAttachmentModal').addEventListener('mousedown', e => {
+    if (e.target === e.currentTarget) closeTextAttachment();
   });
   $('#btnSaveItem').onclick = saveEditor;
   $('#btnDeleteItem').onclick = async () => {
@@ -596,6 +601,13 @@ async function init() {
   };
   $('#clearRemind').onclick = () => { $('#remindInput').value = ''; };
   document.addEventListener('keydown', e => {
+    if (!$('#textAttachmentModal').classList.contains('hidden') &&
+        (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      saveTextAttachment();
+      return;
+    }
+    if (e.key === 'Escape' && !$('#textAttachmentModal').classList.contains('hidden')) closeTextAttachment();
     if (e.key === 'Escape' && !$('#editorModal').classList.contains('hidden')) closeEditor();
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !$('#editorModal').classList.contains('hidden')) saveEditor();
   });

@@ -134,9 +134,13 @@ function createRichEditor(mount, options = {}) {
 /* ---------------- 附件打开：Office 文件调起本地软件（WebDAV 保存回服务器） ---------------- */
 const OFFICE_PROTO = {
   doc: 'ms-word', docx: 'ms-word', docm: 'ms-word', dot: 'ms-word', dotx: 'ms-word', rtf: 'ms-word', odt: 'ms-word',
-  xls: 'ms-excel', xlsx: 'ms-excel', xlsm: 'ms-excel', csv: 'ms-excel', ods: 'ms-excel',
+  xls: 'ms-excel', xlsx: 'ms-excel', xlsm: 'ms-excel', ods: 'ms-excel',
   ppt: 'ms-powerpoint', pptx: 'ms-powerpoint', odp: 'ms-powerpoint'
 };
+const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+  'txt', 'md', 'log', 'json', 'xml', 'yaml', 'yml', 'ini', 'conf', 'cfg',
+  'toml', 'csv', 'tsv', 'html', 'css', 'js', 'py', 'sh', 'sql'
+]);
 
 /* 附件访问地址：/attk/<令牌>/<id>/<文件名>
    令牌放路径里（不放查询参数），否则本机 Office 打开/保存时会丢失导致鉴权失败 */
@@ -153,6 +157,10 @@ function openAttHref(href) {
   const ext = (name.includes('.') ? name.split('.').pop() : '').toLowerCase();
   const proto = OFFICE_PROTO[ext];
   const abs = new URL(href, location.origin).href;
+  if (TEXT_ATTACHMENT_EXTENSIONS.has(ext)) {
+    openTextAttachment(abs, name);
+    return;
+  }
   if (proto) {
     location.href = `${proto}:ofe|u|${abs}`;
     if (typeof toast === 'function') {
@@ -161,6 +169,82 @@ function openAttHref(href) {
     return;
   }
   window.open(abs, '_blank');
+}
+
+let activeTextAttachment = null;
+
+async function openTextAttachment(href, filename) {
+  const modal = document.querySelector('#textAttachmentModal');
+  const title = document.querySelector('#textAttachmentTitle');
+  const content = document.querySelector('#textAttachmentContent');
+  const status = document.querySelector('#textAttachmentStatus');
+  const save = document.querySelector('#textAttachmentSave');
+  activeTextAttachment = { href, original: '', contentType: 'text/plain;charset=UTF-8' };
+  title.textContent = `在线编辑：${filename}`;
+  content.value = '';
+  content.disabled = true;
+  save.disabled = true;
+  status.textContent = '正在从 OSS 读取…';
+  modal.classList.remove('hidden');
+
+  try {
+    const response = await fetch(href, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`读取失败（HTTP ${response.status}）`);
+    const bytes = await response.arrayBuffer();
+    let text;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+        .decode(bytes);
+    } catch {
+      throw new Error('暂不支持非 UTF-8 编码的文本文件，未加载内容以避免误覆盖');
+    }
+    if (!activeTextAttachment || activeTextAttachment.href !== href) return;
+    activeTextAttachment.original = text;
+    activeTextAttachment.contentType = response.headers.get('Content-Type') || 'text/plain;charset=UTF-8';
+    content.value = text;
+    content.disabled = false;
+    save.disabled = false;
+    status.textContent = '已读取。Ctrl+S 保存到 OSS。';
+    content.focus();
+  } catch (error) {
+    if (!activeTextAttachment || activeTextAttachment.href !== href) return;
+    status.textContent = error.message || '读取附件失败';
+  }
+}
+
+async function saveTextAttachment() {
+  const attachment = activeTextAttachment;
+  if (!attachment) return;
+  const content = document.querySelector('#textAttachmentContent');
+  const status = document.querySelector('#textAttachmentStatus');
+  const save = document.querySelector('#textAttachmentSave');
+  if (save.disabled) return;
+  const text = content.value;
+  save.disabled = true;
+  status.textContent = '正在保存到 OSS…';
+  try {
+    const response = await fetch(attachment.href, {
+      method: 'PUT',
+      headers: { 'Content-Type': attachment.contentType },
+      body: text
+    });
+    if (!response.ok) throw new Error(`保存失败（HTTP ${response.status}）`);
+    attachment.original = text;
+    status.textContent = '已保存';
+  } catch (error) {
+    status.textContent = error.message || '保存附件失败';
+  } finally {
+    if (activeTextAttachment === attachment) save.disabled = false;
+  }
+}
+
+function closeTextAttachment() {
+  if (!activeTextAttachment) return;
+  const content = document.querySelector('#textAttachmentContent');
+  if (content.value !== activeTextAttachment.original &&
+      !confirm('有尚未保存的修改，确定关闭吗？')) return;
+  activeTextAttachment = null;
+  document.querySelector('#textAttachmentModal').classList.add('hidden');
 }
 
 /* 从编辑器 HTML 中提取当前保留的附件 id（被删除的会从服务器/OSS 清理） */
