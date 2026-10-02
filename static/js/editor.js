@@ -55,12 +55,12 @@ function createRichEditor(mount, options = {}) {
     }
   });
 
-  // 编辑框内：附件卡片单击打开；图片双击打开（单击用于选中编辑）
+  // 编辑框内：附件卡片单击用本地软件/浏览器打开；图片双击打开（单击用于选中编辑）
   content.addEventListener('click', e => {
     const a = e.target.closest('a.att-chip');
     if (a) {
       e.preventDefault();
-      window.open(a.href, '_blank');
+      openAttHref(a.getAttribute('href'));
     }
   });
   content.addEventListener('dblclick', e => {
@@ -97,11 +97,13 @@ function createRichEditor(mount, options = {}) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '上传失败');
       for (const att of data.attachments) {
+        // 同名覆盖时移除旧卡片，避免重复
+        content.querySelectorAll(`[data-att-id="${att.id}"]`).forEach(el => el.remove());
         if (att.is_image) {
-          insertHTML(`<img src="${esc(att.url)}" alt="${esc(att.filename)}" data-att-id="${att.id}">`);
+          insertHTML(`<img src="${esc(attHref(att))}" alt="${esc(att.filename)}" data-att-id="${att.id}">`);
         } else {
           insertHTML(
-            ` <a class="att-chip" href="${esc(att.url)}" target="_blank" ` +
+            ` <a class="att-chip" href="${esc(attHref(att))}" target="_blank" ` +
             `data-att-id="${att.id}">📎 ${esc(att.filename)} (${fmtSize(att.size)})</a> `);
         }
       }
@@ -120,6 +122,38 @@ function createRichEditor(mount, options = {}) {
     uploadAndInsert,
     element: content
   };
+}
+
+/* ---------------- 附件打开：Office 文件调起本地软件（WebDAV 保存回服务器） ---------------- */
+const OFFICE_PROTO = {
+  doc: 'ms-word', docx: 'ms-word', docm: 'ms-word', dot: 'ms-word', dotx: 'ms-word', rtf: 'ms-word', odt: 'ms-word',
+  xls: 'ms-excel', xlsx: 'ms-excel', xlsm: 'ms-excel', csv: 'ms-excel', ods: 'ms-excel',
+  ppt: 'ms-powerpoint', pptx: 'ms-powerpoint', odp: 'ms-powerpoint'
+};
+
+/* 附件访问地址：/att/<id>/<文件名>?tk=令牌（文件名用于让 Office 识别扩展名） */
+function attHref(att) {
+  if (!att.url.startsWith('/att/')) return att.url;  // 兼容旧的本地直链
+  let href = `${att.url}/${encodeURIComponent(att.filename)}`;
+  if (window.ATT_TOKEN) href += `?tk=${window.ATT_TOKEN}`;
+  return href;
+}
+
+/* 打开附件：Office 文件用本地安装的 Word/Excel/PPT 打开（可编辑后 Ctrl+S 直接保存回服务器），
+   其余（图片/PDF 等）在浏览器打开 */
+function openAttHref(href) {
+  const name = decodeURIComponent(href.split('?')[0].split('/').pop() || '');
+  const ext = (name.includes('.') ? name.split('.').pop() : '').toLowerCase();
+  const proto = OFFICE_PROTO[ext];
+  const abs = new URL(href, location.origin).href;
+  if (proto) {
+    location.href = `${proto}:ofe|u|${abs}`;
+    if (typeof toast === 'function') {
+      toast('正在用本地软件打开…', '若未自动打开，请右键该附件选择"打开/另存为"');
+    }
+    return;
+  }
+  window.open(abs, '_blank');
 }
 
 /* 从编辑器 HTML 中提取当前保留的附件 id（被删除的会从服务器/OSS 清理） */

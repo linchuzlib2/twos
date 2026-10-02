@@ -8,10 +8,12 @@ import logging
 import os
 import re
 import secrets
+import uuid as _uuid
 
 from urllib.parse import quote
 
 from flask import (Flask, Response, abort, jsonify, render_template, request, send_from_directory, session)
+from werkzeug.http import http_date
 
 import db
 import storage
@@ -32,6 +34,11 @@ def auth_guard():
         return None
     if session.get("auth"):
         return None
+    # 附件访问：支持 ?tk= 令牌（本机 Office/WebDAV 保存时没有浏览器会话）
+    if request.path.startswith("/att/"):
+        tk = request.args.get("tk", "")
+        if tk and tk == session.get("att_token"):
+            return None
     if request.path.startswith("/static") or request.path in ("/login", "/auth/login", "/healthz"):
         return None
     if request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json":
@@ -75,18 +82,102 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/att/<int:att_id>")
-def att_file(att_id):
-    """附件/图片代理访问：从 OSS（或本地）读取后返回，私有 Bucket 也能正常打开"""
+ATT_METHODS = ["GET", "HEAD", "OPTIONS", "PUT", "PROPFIND", "LOCK", "UNLOCK"]
+
+
+def _dav_prop_response(href, name, size, ctype, is_collection):
+    resourcetype = (
+        "<D:resourcetype><D:collection/></D:resourcetype>"
+        if is_collection else "<D:resourcetype/>"
+    )
+    return (
+        f"<D:response><D:href>{href}</D:href><D:propstat><D:prop>"
+        f"<D:displayname>{quote(name)}</D:displayname>"
+        f"<D:getcontentlength>{size}</D:getcontentlength>"
+        f"<D:getcontenttype>{ctype or 'application/octet-stream'}</D:getcontenttype>"
+        f"<D:getlastmodified>{http_date()}</D:getlastmodified>"
+        f"<D:creationdate>{db.now_cn()}</D:creationdate>"
+        f"{resourcetype}"
+        "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+    )
+
+
+@app.route("/att/<int:att_id>", methods=ATT_METHODS)
+@app.route("/att/<int:att_id>/", methods=ATT_METHODS)
+@app.route("/att/<int:att_id>/<path:fname>", methods=ATT_METHODS)
+def att_file(att_id, fname=None):
+    """附件代理访问（私有 Bucket 可用）+ 最小 WebDAV 支持：
+    - GET/HEAD：查看/下载（图片、PDF 直接在浏览器打开，Office 文件下载）
+    - PUT：本机 Word/Excel 保存时写回 -> 覆盖 OSS 原对象
+    - OPTIONS/PROPFIND/LOCK/UNLOCK：Office 打开远端文档所需的最小 WebDAV 协议
+    """
     with db.get_db() as conn:
         row = conn.execute("SELECT * FROM attachments WHERE id = ?", (att_id,)).fetchone()
     if not row:
         abort(404)
+
+    m = request.method
+
+    if m == "OPTIONS":
+        resp = Response()
+        resp.headers["DAV"] = "1, 2"
+        resp.headers["Allow"] = "OPTIONS, GET, HEAD, PUT, PROPFIND, LOCK, UNLOCK"
+        resp.headers["MS-Author-Via"] = "DAV"
+        return resp
+
+    if m == "PROPFIND":
+        is_collection = fname is None
+        parts = ['<?xml version="1.0" encoding="utf-8"?>',
+                 '<D:multistatus xmlns:D="DAV:">']
+        parts.append(_dav_prop_response(
+            request.path, row["filename"] if fname else str(att_id),
+            row["size"], row["content_type"], is_collection))
+        if is_collection and request.headers.get("Depth") == "1":
+            # 列出集合里的文件本身
+            parts.append(_dav_prop_response(
+                request.path + quote(row["filename"]), row["filename"],
+                row["size"], row["content_type"], False))
+        parts.append("</D:multistatus>")
+        return Response("".join(parts), status=207, content_type='text/xml; charset="utf-8"')
+
+    if m == "LOCK":
+        token = f"opaquelocktoken:{_uuid.uuid4()}"
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
+            '<D:locktype><D:write/></D:locktype>'
+            '<D:lockscope><D:exclusive/></D:lockscope>'
+            '<D:depth>0</D:depth>'
+            '<D:timeout>Second-3600</D:timeout>'
+            f'<D:locktoken><D:href>{token}</D:href></D:locktoken>'
+            '</D:activelock></D:lockdiscovery></D:prop>'
+        )
+        resp = Response(xml, content_type='text/xml; charset="utf-8"')
+        resp.headers["Lock-Token"] = f"<{token}>"
+        return resp
+
+    if m == "UNLOCK":
+        return "", 204
+
+    if m == "PUT":
+        # 本机 Office 保存：覆盖 OSS 上的原文件
+        data = request.get_data()
+        ctype = (request.content_type or row["content_type"] or "application/octet-stream").split(";")[0]
+        storage.upload_bytes(row["oss_key"], data, ctype)
+        with db.get_db() as conn:
+            conn.execute("UPDATE attachments SET size = ?, content_type = ? WHERE id = ?",
+                         (len(data), ctype, att_id))
+        storage.mark_dirty()
+        return "", 204
+
+    # GET / HEAD：读取文件
     try:
         data = storage.read_bytes(row["oss_key"])
     except Exception:
         abort(404)
-    disposition = "inline" if row["is_image"] else "attachment"
+    lower = (row["filename"] or "").lower()
+    inline = bool(row["is_image"]) or row["content_type"] == "application/pdf" or lower.endswith(".pdf")
+    disposition = "inline" if inline else "attachment"
     resp = Response(data, content_type=row["content_type"] or "application/octet-stream")
     resp.headers["Content-Disposition"] = (
         f"{disposition}; filename*=UTF-8''{quote(row['filename'])}"
@@ -169,10 +260,13 @@ def next_sort(conn, list_id=None, date=None):
 
 @app.route("/api/bootstrap")
 def api_bootstrap():
+    # 附件令牌：供本机 Office（WebDAV 保存）等无会话场景访问 /att/
+    session.setdefault("att_token", secrets.token_hex(16))
     return jsonify({
         "today": db.today_cn(),
         "now": db.now_cn(),
         "lists": all_lists(),
+        "att_token": session["att_token"],
         "auth": bool(session.get("auth")) or not APP_PASSWORD,
     })
 
@@ -427,17 +521,34 @@ def api_upload():
             return jsonify({"error": f"{f.filename} 超过 100MB 限制"}), 413
         content_type = f.content_type or "application/octet-stream"
         filename = f.filename
-        key, url = storage.upload_bytes(storage.gen_key(filename), data, content_type)
         is_image = int(content_type.startswith("image/"))
-        with db.get_db() as conn:
-            cur = conn.execute(
-                """INSERT INTO attachments (item_id, filename, oss_key, url, size, content_type, is_image, created_at)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (item_id, filename, key, url, len(data), content_type, is_image, db.now_cn()),
-            )
-            aid = cur.lastrowid
-            # 附件统一通过 /att/<id> 由服务器代理读取，Bucket 可保持私有
-            if storage.oss_configured():
+        # 同一事项上传同名文件 -> 覆盖原附件（OSS 原对象被覆盖，链接不变）
+        old = None
+        if item_id:
+            with db.get_db() as conn:
+                old = conn.execute(
+                    "SELECT * FROM attachments WHERE item_id = ? AND filename = ?",
+                    (item_id, filename),
+                ).fetchone()
+        if old:
+            storage.upload_bytes(old["oss_key"], data, content_type)
+            with db.get_db() as conn:
+                conn.execute(
+                    "UPDATE attachments SET size = ?, content_type = ?, is_image = ?, url = ? WHERE id = ?",
+                    (len(data), content_type, is_image, f"/att/{old['id']}", old["id"]),
+                )
+            aid = old["id"]
+            url = f"/att/{aid}"
+        else:
+            key, url = storage.upload_bytes(storage.gen_key(filename), data, content_type)
+            with db.get_db() as conn:
+                cur = conn.execute(
+                    """INSERT INTO attachments (item_id, filename, oss_key, url, size, content_type, is_image, created_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (item_id, filename, key, url, len(data), content_type, is_image, db.now_cn()),
+                )
+                aid = cur.lastrowid
+                # 附件统一通过 /att/<id> 由服务器代理读取，Bucket 可保持私有
                 conn.execute("UPDATE attachments SET url = ? WHERE id = ?", (f"/att/{aid}", aid))
                 url = f"/att/{aid}"
         results.append({

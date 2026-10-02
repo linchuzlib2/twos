@@ -76,10 +76,45 @@ data = {"files": (io.BytesIO(b"hello image"), "test.png", "image/png")}
 r = client.post("/api/upload", data=data, content_type="multipart/form-data")
 up = check("upload image", r)
 att = up["attachments"][0]
-assert att["is_image"] and att["url"].startswith("/local-files/"), up
+assert att["is_image"] and att["url"].startswith("/att/"), up
 r = client.get(f"/att/{att['id']}")
 assert r.status_code == 200 and r.data == b"hello image", f"附件代理访问失败: {r.status_code}"
 print("  PASS /att/<id> proxy")
+globals()["ok"] = ok + 1
+
+print("[6b] Office/WebDAV 保存回写")
+u = f"/att/{att['id']}/test.png"
+r = client.open(u, method="OPTIONS")
+assert r.status_code == 200 and "1, 2" in r.headers.get("DAV", ""), r.headers
+print("  PASS OPTIONS (DAV)")
+globals()["ok"] = ok + 1
+r = client.open(u, method="PROPFIND")
+assert r.status_code == 207 and b"multistatus" in r.data, (r.status_code, r.data[:100])
+print("  PASS PROPFIND")
+globals()["ok"] = ok + 1
+r = client.open(u, method="LOCK")
+assert r.status_code == 200 and "Lock-Token" in r.headers, r.headers
+print("  PASS LOCK")
+globals()["ok"] = ok + 1
+r = client.put(u, data=b"edited by word")
+assert r.status_code == 204, r.status_code
+r = client.get(u)
+assert r.data == b"edited by word", "PUT 覆盖失败"
+print("  PASS PUT 覆盖保存")
+globals()["ok"] = ok + 1
+
+print("[6c] 同名文件重新上传覆盖")
+# 先把附件关联到事项，再同名上传 -> 应覆盖而不是新增
+r = client.patch(f"/api/items/{iid}", json={"attachment_ids": [att["id"]]})
+check("link attachment first", r)
+data = {"files": (io.BytesIO(b"replaced content"), "test.png", "image/png"),
+        "item_id": str(iid)}
+r = client.post("/api/upload", data=data, content_type="multipart/form-data")
+up2 = check("same-name upload", r)
+assert up2["attachments"][0]["id"] == att["id"], "同名未覆盖，产生了新附件"
+r = client.get(f"/att/{att['id']}")
+assert r.data == b"replaced content", "同名覆盖后内容未更新"
+print("  PASS 覆盖同一附件记录")
 globals()["ok"] = ok + 1
 r = client.patch(f"/api/items/{iid}", json={
     "content_html": f'<p>带图</p><img src="{att["url"]}" data-att-id="{att["id"]}">',

@@ -150,10 +150,10 @@ function renderItems() {
         </div>
         ${it.attachments.filter(a => a.is_image).length ? `
           <div class="thumbs">${it.attachments.filter(a => a.is_image).slice(0, 4).map(a =>
-            `<img src="${esc(a.url)}" data-url="${esc(a.url)}" alt="${esc(a.filename)}">`).join('')}</div>` : ''}
+            `<img src="${esc(attHref(a))}" data-url="${esc(attHref(a))}" alt="${esc(a.filename)}">`).join('')}</div>` : ''}
         ${it.attachments.filter(a => !a.is_image).length ? `
           <div class="atts-row">${it.attachments.filter(a => !a.is_image).map(a =>
-            `<a class="att-chip" href="${esc(a.url)}" target="_blank">📎 ${esc(a.filename)}</a>`).join('')}</div>` : ''}
+            `<a class="att-chip" href="${esc(attHref(a))}" target="_blank">📎 ${esc(a.filename)}</a>`).join('')}</div>` : ''}
       </div>
       <button class="star ${it.starred ? 'on' : ''}" title="星标">★</button>
       <div class="order">
@@ -179,6 +179,10 @@ function renderItems() {
     };
     li.querySelector('.up').onclick = () => reorderItem(id, -1);
     li.querySelector('.down').onclick = () => reorderItem(id, 1);
+    // 附件卡片：Office 文件调起本地软件打开（可编辑保存回服务器），其他浏览器打开
+    li.querySelectorAll('a.att-chip').forEach(a => {
+      a.onclick = e => { e.preventDefault(); openAttHref(a.getAttribute('href')); };
+    });
   });
 }
 
@@ -492,6 +496,7 @@ async function refreshLists() {
 async function init() {
   const boot = await api('/api/bootstrap');
   state.today = boot.today;
+  window.ATT_TOKEN = boot.att_token || '';
   const [y, m, d] = boot.today.split('-');
   $('#todayLabel').textContent = `今天是 ${y}年${+m}月${+d}日（北京时间）`;
   await refreshLists();
