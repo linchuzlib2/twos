@@ -68,5 +68,76 @@ class RestoreDatabaseTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.database_path))
 
 
+class PersistDatabaseChangeTests(unittest.TestCase):
+    def test_uploads_a_consistent_sqlite_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = os.path.join(temp_dir, "current.sqlite")
+            conn = sqlite3.connect(database_path)
+            try:
+                conn.executescript(db.SCHEMA)
+                conn.execute(
+                    "INSERT INTO items (content_text, created_at, updated_at) VALUES (?, ?, ?)",
+                    ("saved before response", "2026-10-03T00:00:00", "2026-10-03T00:00:00"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            uploaded = {}
+
+            def inspect_upload(key, path, content_type):
+                conn = sqlite3.connect(path)
+                try:
+                    uploaded["text"] = conn.execute(
+                        "SELECT content_text FROM items"
+                    ).fetchone()[0]
+                finally:
+                    conn.close()
+                uploaded["key"] = key
+                uploaded["content_type"] = content_type
+                return "oss://test"
+
+            with (
+                patch.object(db, "DB_PATH", database_path),
+                patch.object(storage, "oss_configured", return_value=True),
+                patch.object(storage, "upload_file", side_effect=inspect_upload),
+            ):
+                self.assertTrue(storage.backup_db_now())
+
+            self.assertEqual(uploaded["text"], "saved before response")
+            self.assertEqual(uploaded["key"], storage.OSS_DB_BACKUP_KEY)
+            self.assertEqual(uploaded["content_type"], "application/x-sqlite3")
+
+    def test_skips_backup_when_oss_is_not_configured(self):
+        with (
+            patch.object(storage, "oss_configured", return_value=False),
+            patch.object(storage, "backup_db_now") as backup,
+        ):
+            result = storage.persist_db_change()
+
+        self.assertIsNone(result)
+        backup.assert_not_called()
+
+    def test_returns_true_when_synchronous_backup_succeeds(self):
+        with (
+            patch.object(storage, "oss_configured", return_value=True),
+            patch.object(storage, "backup_db_now", return_value=True),
+        ):
+            result = storage.persist_db_change()
+
+        self.assertTrue(result)
+
+    def test_queues_retry_when_synchronous_backup_fails(self):
+        with (
+            patch.object(storage, "oss_configured", return_value=True),
+            patch.object(storage, "backup_db_now", return_value=False),
+            patch.object(storage, "mark_dirty") as mark_dirty,
+        ):
+            result = storage.persist_db_change()
+
+        self.assertFalse(result)
+        mark_dirty.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

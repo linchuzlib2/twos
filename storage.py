@@ -7,6 +7,7 @@
 import logging
 import os
 import sqlite3
+import tempfile
 import threading
 import time
 import uuid
@@ -150,14 +151,38 @@ def backup_db_now():
     if not oss_configured():
         return False
     with _backup_lock:
+        snapshot_path = None
         try:
-            db.checkpoint()  # 合并 WAL，确保单文件完整
-            url = upload_file(OSS_DB_BACKUP_KEY, db.DB_PATH, "application/x-sqlite3")
+            fd, snapshot_path = tempfile.mkstemp(prefix="twos-db-", suffix=".sqlite")
+            os.close(fd)
+            source = sqlite3.connect(db.DB_PATH, timeout=30)
+            try:
+                snapshot = sqlite3.connect(snapshot_path, timeout=30)
+                try:
+                    source.backup(snapshot)
+                finally:
+                    snapshot.close()
+            finally:
+                source.close()
+            url = upload_file(OSS_DB_BACKUP_KEY, snapshot_path, "application/x-sqlite3")
             log.info("数据库已备份到 OSS: %s", url)
             return True
         except Exception:
             log.exception("数据库备份到 OSS 失败")
             return False
+        finally:
+            if snapshot_path and os.path.exists(snapshot_path):
+                os.remove(snapshot_path)
+
+
+def persist_db_change():
+    """同步备份已提交的数据库更改；失败时排队重试。"""
+    if not oss_configured():
+        return None
+    if backup_db_now():
+        return True
+    mark_dirty()
+    return False
 
 
 def _backup_loop():

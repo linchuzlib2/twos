@@ -68,10 +68,21 @@ def auth_guard():
 
 @app.after_request
 def auto_backup(resp):
-    """所有写操作成功后，第一时间触发数据库备份到 OSS"""
-    if request.method in ("POST", "PUT", "PATCH", "DELETE") and request.path.startswith("/api/"):
+    """写操作返回成功前，先确认数据库快照已上传到 OSS"""
+    writes_database = (
+        request.path.startswith("/api/")
+        or request.path.startswith("/att/")
+        or request.path.startswith("/attk/")
+    )
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and writes_database:
         if resp.status_code < 400:
-            storage.mark_dirty()
+            if storage.persist_db_change() is False:
+                log.error("请求已写入当前实例，但 OSS 数据库备份失败；需检查 OSS 后再重试")
+                error_response = jsonify({
+                    "error": "数据已写入当前实例，但 OSS 备份失败；请先检查服务日志，暂勿重复提交"
+                })
+                error_response.status_code = 503
+                return error_response
     return resp
 
 
@@ -199,7 +210,6 @@ def att_file(att_id, fname=None):
             conn.execute("UPDATE attachments SET size = ?, content_type = ? WHERE id = ?",
                          (len(data), ctype, att_id))
         extract_and_store(att_id, data, row["filename"])
-        storage.mark_dirty()
         return "", 204
 
     # GET / HEAD：读取文件
@@ -349,7 +359,11 @@ def api_day(date):
     if not db.valid_date(date):
         abort(400)
     if date == db.today_cn():
-        db.carry_over_unfinished(date)  # 未完成事项自动顺延到今天
+        moved = db.carry_over_unfinished(date)  # 未完成事项自动顺延到今天
+        if moved and storage.persist_db_change() is False:
+            return jsonify({
+                "error": "数据已写入当前实例，但 OSS 备份失败；请先检查服务日志，暂勿重复提交"
+            }), 503
     with db.get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM items WHERE date = ? ORDER BY done, sort, id", (date,)
@@ -621,6 +635,10 @@ def api_reminders_due():
         ).fetchall()
         for r in rows:
             conn.execute("UPDATE items SET notified_at = ? WHERE id = ?", (now, r["id"]))
+    if rows and storage.persist_db_change() is False:
+        return jsonify({
+            "error": "数据已写入当前实例，但 OSS 备份失败；请先检查服务日志，暂勿重复提交"
+        }), 503
     return jsonify({"items": [item_row_to_dict(r, with_attachments=False) for r in rows]})
 
 
