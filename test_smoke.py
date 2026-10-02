@@ -104,6 +104,8 @@ print("  PASS PROPFIND")
 globals()["ok"] = ok + 1
 r = client.open(u, method="LOCK")
 assert r.status_code == 200 and "Lock-Token" in r.headers, r.headers
+assert b"<D:lockroot>" in r.data and u.encode() in r.data, r.data
+assert r.headers.get("Timeout") == "Second-3600", r.headers
 print("  PASS LOCK")
 globals()["ok"] = ok + 1
 r = client.put(u, data=b"edited by word")

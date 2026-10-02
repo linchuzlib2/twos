@@ -179,10 +179,12 @@ def att_file(att_id, fname=None):
             '<D:depth>0</D:depth>'
             '<D:timeout>Second-3600</D:timeout>'
             f'<D:locktoken><D:href>{token}</D:href></D:locktoken>'
+            f'<D:lockroot><D:href>{quote(request.path)}</D:href></D:lockroot>'
             '</D:activelock></D:lockdiscovery></D:prop>'
         )
         resp = Response(xml, content_type='text/xml; charset="utf-8"')
         resp.headers["Lock-Token"] = f"<{token}>"
+        resp.headers["Timeout"] = "Second-3600"
         return resp
 
     if m == "UNLOCK":
