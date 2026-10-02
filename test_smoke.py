@@ -106,13 +106,29 @@ r = client.open(u, method="LOCK")
 assert r.status_code == 200 and "Lock-Token" in r.headers, r.headers
 assert b"<D:lockroot>" in r.data and u.encode() in r.data, r.data
 assert r.headers.get("Timeout") == "Second-3600", r.headers
+lock_token = r.headers["Lock-Token"]
 print("  PASS LOCK")
 globals()["ok"] = ok + 1
-r = client.put(u, data=b"edited by word")
+r = client.open(u, method="LOCK")
+assert r.status_code == 423, r.status_code
+r = client.open(u, method="LOCK", headers={"If": f"({lock_token})", "Timeout": "Second-120"})
+assert r.status_code == 200 and r.headers["Lock-Token"] == lock_token, r.headers
+assert r.headers.get("Timeout") == "Second-120", r.headers
+print("  PASS LOCK conflict and refresh")
+globals()["ok"] = ok + 1
+r = client.put(u, data=b"edited by word", headers={"If": f"({lock_token})"})
 assert r.status_code == 204, r.status_code
 r = client.get(u)
 assert r.data == b"edited by word", "PUT 覆盖失败"
 print("  PASS PUT 覆盖保存")
+globals()["ok"] = ok + 1
+r = client.put(u, data=b"must be rejected")
+assert r.status_code == 423, r.status_code
+print("  PASS locked attachment rejects a write without its lock token")
+globals()["ok"] = ok + 1
+r = client.open(u, method="UNLOCK", headers={"Lock-Token": lock_token})
+assert r.status_code == 204, r.status_code
+print("  PASS UNLOCK releases the attachment")
 globals()["ok"] = ok + 1
 
 print("[6c] 同名文件重新上传覆盖")

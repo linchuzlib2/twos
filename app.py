@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import uuid as _uuid
 
 from urllib.parse import quote
@@ -114,6 +115,33 @@ def index():
 
 
 ATT_METHODS = ["GET", "HEAD", "OPTIONS", "PUT", "PROPFIND", "LOCK", "UNLOCK"]
+_dav_locks = {}
+_dav_locks_guard = threading.Lock()
+
+
+def _dav_lock_token():
+    value = request.headers.get("Lock-Token", "") + " " + request.headers.get("If", "")
+    match = re.search(r"opaquelocktoken:[0-9a-fA-F-]+", value)
+    return match.group(0) if match else ""
+
+
+def _dav_lock_timeout():
+    match = re.search(r"Second-(\d+)", request.headers.get("Timeout", ""), re.IGNORECASE)
+    return min(max(int(match.group(1)), 30), 3600) if match else 3600
+
+
+def _dav_lock_xml(token, href, timeout):
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
+        '<D:locktype><D:write/></D:locktype>'
+        '<D:lockscope><D:exclusive/></D:lockscope>'
+        '<D:depth>0</D:depth>'
+        f'<D:timeout>Second-{timeout}</D:timeout>'
+        f'<D:locktoken><D:href>{xml_escape(token)}</D:href></D:locktoken>'
+        f'<D:lockroot><D:href>{quote(href)}</D:href></D:lockroot>'
+        '</D:activelock></D:lockdiscovery></D:prop>'
+    )
 
 
 def _dav_prop_response(href, name, size, ctype, is_collection):
@@ -181,28 +209,45 @@ def att_file(att_id, fname=None):
         return Response("".join(parts), status=207, content_type='text/xml; charset="utf-8"')
 
     if m == "LOCK":
-        token = f"opaquelocktoken:{_uuid.uuid4()}"
-        xml = (
-            '<?xml version="1.0" encoding="utf-8"?>'
-            '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
-            '<D:locktype><D:write/></D:locktype>'
-            '<D:lockscope><D:exclusive/></D:lockscope>'
-            '<D:depth>0</D:depth>'
-            '<D:timeout>Second-3600</D:timeout>'
-            f'<D:locktoken><D:href>{token}</D:href></D:locktoken>'
-            f'<D:lockroot><D:href>{quote(request.path)}</D:href></D:lockroot>'
-            '</D:activelock></D:lockdiscovery></D:prop>'
+        token = _dav_lock_token()
+        timeout = _dav_lock_timeout()
+        with _dav_locks_guard:
+            lock = _dav_locks.get(att_id)
+            if lock and lock["expires"] <= time.monotonic():
+                _dav_locks.pop(att_id, None)
+                lock = None
+            if lock and lock["token"] != token:
+                return "", 423
+            if lock is None:
+                token = f"opaquelocktoken:{_uuid.uuid4()}"
+            _dav_locks[att_id] = {"token": token, "expires": time.monotonic() + timeout}
+        resp = Response(
+            _dav_lock_xml(token, request.path, timeout),
+            content_type='text/xml; charset="utf-8"'
         )
-        resp = Response(xml, content_type='text/xml; charset="utf-8"')
         resp.headers["Lock-Token"] = f"<{token}>"
-        resp.headers["Timeout"] = "Second-3600"
+        resp.headers["Timeout"] = f"Second-{timeout}"
         return resp
 
     if m == "UNLOCK":
+        token = _dav_lock_token()
+        with _dav_locks_guard:
+            lock = _dav_locks.get(att_id)
+            if not lock or lock["token"] != token:
+                return "", 409
+            _dav_locks.pop(att_id, None)
         return "", 204
 
     if m == "PUT":
         # 本机 Office 保存：覆盖 OSS 上的原文件，并重新提取搜索文本
+        token = _dav_lock_token()
+        with _dav_locks_guard:
+            lock = _dav_locks.get(att_id)
+            if lock and lock["expires"] <= time.monotonic():
+                _dav_locks.pop(att_id, None)
+                lock = None
+            if lock and lock["token"] != token:
+                return "", 423
         data = request.get_data()
         ctype = (request.content_type or row["content_type"] or "application/octet-stream").split(";")[0]
         storage.upload_bytes(row["oss_key"], data, ctype)

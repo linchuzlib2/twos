@@ -61,6 +61,7 @@ assert r.status_code == 204, f"{r.status_code} {r.text[:300]}"
 # UNLOCK
 r = s.request("UNLOCK", attk, headers={"Lock-Token": f"<{lock_token}>"})
 print(f"UNLOCK -> {r.status_code}")
+assert r.status_code == 204, f"{r.status_code} {r.text[:300]}"
 
 # 5. 验证内容已更新
 r = s.get(attk)
