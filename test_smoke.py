@@ -166,6 +166,7 @@ hit = [i for i in res["items"] if i["id"] == iid]
 assert hit, "附件内容未被搜索到"
 m = [a for a in hit[0]["attachments"] if a.get("match")]
 assert m and "量子加速器" in m[0]["snippet"], m
+assert "extraction_version" not in m[0], m[0]
 print("  PASS txt 附件内容搜索命中")
 globals()["ok"] = ok + 1
 

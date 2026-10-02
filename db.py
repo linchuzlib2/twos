@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     content_type TEXT DEFAULT '',
     is_image INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
-    extracted_text TEXT DEFAULT ''
+    extracted_text TEXT DEFAULT '',
+    extraction_version INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_att_item ON attachments(item_id);
 """
@@ -96,6 +97,8 @@ def init_db():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(attachments)")}
         if cols and "extracted_text" not in cols:
             conn.execute("ALTER TABLE attachments ADD COLUMN extracted_text TEXT DEFAULT ''")
+        if cols and "extraction_version" not in cols:
+            conn.execute("ALTER TABLE attachments ADD COLUMN extraction_version INTEGER DEFAULT 0")
         # 迁移：旧表补充 is_todo 列；存量事项保持原来的待办行为，新事项默认为笔记
         cols = {r[1] for r in conn.execute("PRAGMA table_info(items)")}
         if cols and "is_todo" not in cols:

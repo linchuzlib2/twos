@@ -311,16 +311,20 @@ def item_row_to_dict(row, with_attachments=True):
         for a in atts:
             ad = dict(a)
             ad.pop("extracted_text", None)
+            ad.pop("extraction_version", None)
             d["attachments"].append(ad)
     return d
 
 
 def extract_and_store(att_id, data, filename):
-    """提取附件文本（供全文搜索），失败静默"""
+    """提取附件文本（供全文搜索），并记录提取器版本以便升级重建索引"""
     try:
         text = extract.extract_text(data, filename)
         with db.get_db() as conn:
-            conn.execute("UPDATE attachments SET extracted_text = ? WHERE id = ?", (text, att_id))
+            conn.execute(
+                "UPDATE attachments SET extracted_text = ?, extraction_version = ? WHERE id = ?",
+                (text, extract.INDEX_VERSION, att_id),
+            )
     except Exception:
         log.exception("附件文本提取失败 id=%s", att_id)
 
@@ -637,6 +641,7 @@ def api_search():
             ).fetchall():
                 ad = dict(a)
                 et = ad.pop("extracted_text", "") or ""
+                ad.pop("extraction_version", None)
                 if ql in et.lower():
                     ad["match"] = True
                     ad["snippet"] = make_snippet(et, q)
@@ -791,9 +796,17 @@ def backfill_extraction():
             with db.get_db() as conn:
                 rows = conn.execute(
                     "SELECT id, filename, oss_key FROM attachments "
-                    "WHERE extracted_text IS NULL OR extracted_text = ''"
+                    "WHERE extraction_version < ?",
+                    (extract.INDEX_VERSION,),
                 ).fetchall()
             for r in rows:
+                if not extract.supports_extraction(r["filename"]):
+                    with db.get_db() as conn:
+                        conn.execute(
+                            "UPDATE attachments SET extraction_version = ? WHERE id = ?",
+                            (extract.INDEX_VERSION, r["id"]),
+                        )
+                    continue
                 try:
                     data = storage.read_bytes(r["oss_key"])
                     extract_and_store(r["id"], data, r["filename"])
