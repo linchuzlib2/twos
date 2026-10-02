@@ -744,9 +744,9 @@ def backfill_extraction():
     threading.Thread(target=run, daemon=True, name="extract-backfill").start()
 
 
+storage.restore_db_if_needed()
 db.init_db()
 migrate_attachment_urls()
-storage.restore_db_if_needed()
 storage.start_backup_thread()
 backfill_extraction()
 

@@ -6,6 +6,7 @@
 """
 import logging
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -109,7 +110,7 @@ def object_last_modified(key):
         return None
     except Exception:
         log.exception("获取 OSS 对象 meta 失败: %s", key)
-        return None
+        raise
 
 
 def download_to(key, local_path):
@@ -178,6 +179,7 @@ def start_backup_thread():
 def restore_db_if_needed():
     """启动时从 OSS 恢复数据库（Render 磁盘是临时的，重启后需恢复）"""
     if not oss_configured():
+        log.warning("OSS 未配置，数据库仅保存在本机临时磁盘，Render 重启后可能丢失")
         return
     local_exists = os.path.isfile(db.DB_PATH)
     oss_modified = object_last_modified(OSS_DB_BACKUP_KEY)
@@ -187,19 +189,43 @@ def restore_db_if_needed():
                 backup_db_now()  # OSS 上没有，本地有 -> 上传
             return
         if not local_exists:
-            # 本地没有 -> 直接下载
-            db.checkpoint()
-            if download_to(OSS_DB_BACKUP_KEY, db.DB_PATH):
-                log.info("已从 OSS 恢复数据库")
+            _restore_backup(OSS_DB_BACKUP_KEY, db.DB_PATH)
+            log.info("已从 OSS 恢复数据库")
             return
         # 都存在 -> 比较修改时间，取较新的
         local_mtime = datetime.utcfromtimestamp(os.path.getmtime(db.DB_PATH))
         if oss_modified > local_mtime:
-            db.checkpoint()
-            if download_to(OSS_DB_BACKUP_KEY, db.DB_PATH + ".tmp"):
-                os.replace(db.DB_PATH + ".tmp", db.DB_PATH)
-                log.info("OSS 版本较新，已用 OSS 版本覆盖本地数据库")
+            _restore_backup(OSS_DB_BACKUP_KEY, db.DB_PATH)
+            log.info("OSS 版本较新，已用 OSS 版本覆盖本地数据库")
         elif local_mtime > oss_modified:
             backup_db_now()
     except Exception:
         log.exception("恢复数据库时出错")
+        raise
+
+
+def _restore_backup(key, local_path):
+    """先下载并验证备份，再原子替换数据库，避免失败时启动空数据库。"""
+    temp_path = local_path + ".restore.tmp"
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    try:
+        if not download_to(key, temp_path):
+            raise RuntimeError(f"无法从 OSS 下载数据库备份: {key}")
+        conn = sqlite3.connect(temp_path)
+        try:
+            try:
+                if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise RuntimeError(f"OSS 数据库备份校验失败: {key}")
+                tables = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )}
+                if not {"items", "attachments"}.issubset(tables):
+                    raise RuntimeError(f"OSS 数据库备份缺少必要数据表: {key}")
+            except sqlite3.DatabaseError as exc:
+                raise RuntimeError(f"OSS 数据库备份无法读取: {key}") from exc
+        finally:
+            conn.close()
+        os.replace(temp_path, local_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
