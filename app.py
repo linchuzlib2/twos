@@ -223,6 +223,7 @@ def item_row_to_dict(row, with_attachments=True):
     d = dict(row)
     d["done"] = bool(d["done"])
     d["starred"] = bool(d["starred"])
+    d["is_todo"] = bool(d.get("is_todo"))
     if with_attachments:
         with db.get_db() as conn:
             atts = conn.execute(
@@ -413,22 +414,25 @@ def api_create_item():
     html = db.sanitize_html(data.get("content_html") or "")
     text = db.html_to_text(html) or (data.get("content_text") or "").strip()
     remind_at = normalize_remind(data.get("remind_at"))
+    is_todo = 1 if data.get("is_todo") else 0  # 默认为笔记，用户可主动设为待办
     now = db.now_cn()
     with db.get_db() as conn:
         sort = next_sort(conn, list_id=list_id, date=date)
         cur = conn.execute(
-            """INSERT INTO items (list_id, date, content_html, content_text, starred, remind_at, sort, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (list_id, date, html, text, 1 if data.get("starred") else 0, remind_at, sort, now, now),
+            """INSERT INTO items (list_id, date, content_html, content_text, starred, is_todo, remind_at, sort, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (list_id, date, html, text, 1 if data.get("starred") else 0, is_todo, remind_at, sort, now, now),
         )
         item_id = cur.lastrowid
     sync_attachments(item_id, data.get("attachment_ids") or [])
     return jsonify(item_row_to_dict(get_item_or_404(item_id))), 201
 
 
-@app.route("/api/items/<int:item_id>", methods=["PATCH", "DELETE"])
+@app.route("/api/items/<int:item_id>", methods=["GET", "PATCH", "DELETE"])
 def api_item(item_id):
     row = get_item_or_404(item_id)
+    if request.method == "GET":
+        return jsonify(item_row_to_dict(row))
     if request.method == "DELETE":
         for a in item_row_to_dict(row)["attachments"]:
             storage.delete_key(a["oss_key"])
@@ -453,6 +457,11 @@ def api_item(item_id):
             conn.execute(
                 "UPDATE items SET starred = ? WHERE id = ?",
                 (1 if data["starred"] else 0, item_id),
+            )
+        if "is_todo" in data:
+            conn.execute(
+                "UPDATE items SET is_todo = ?, updated_at = ? WHERE id = ?",
+                (1 if data["is_todo"] else 0, db.now_cn(), item_id),
             )
         if "remind_at" in data:
             conn.execute(
@@ -555,6 +564,29 @@ def api_search():
             it["attachments"] = atts
             result.append(it)
     return jsonify({"items": result})
+
+
+@app.route("/api/files")
+def api_files():
+    """文件库：所有事项/待办的附件汇总，可按文件名筛选"""
+    q = (request.args.get("q") or "").strip()
+    sql = """SELECT a.id, a.filename, a.url, a.size, a.content_type, a.is_image, a.created_at,
+                    a.item_id, i.content_text AS item_text, i.date AS item_date, i.list_id
+             FROM attachments a LEFT JOIN items i ON i.id = a.item_id"""
+    args = ()
+    if q:
+        sql += " WHERE a.filename LIKE ?"
+        args = (f"%{q}%",)
+    sql += " ORDER BY a.id DESC LIMIT 500"
+    with db.get_db() as conn:
+        rows = conn.execute(sql, args).fetchall()
+    files = []
+    for r in rows:
+        d = dict(r)
+        d.pop("item_text", None)
+        d["item_preview"] = (r["item_text"] or "").split("\n")[0][:60] if r["item_text"] else ""
+        files.append(d)
+    return jsonify({"files": files})
 
 
 @app.route("/api/reminders/due")

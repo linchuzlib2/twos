@@ -35,22 +35,32 @@ print("[2] 事项 CRUD")
 r = client.post("/api/items", json={"date": today, "content_html": "<p>写<b>周报</b></p><script>alert(1)</script>"})
 item = check("create item", r, 201)
 assert "周报" in item["content_html"] and "script" not in item["content_html"], "HTML 清洗失败"
+assert item["is_todo"] is False, "默认应是笔记而非待办"
 iid = item["id"]
+check("set is_todo", client.patch(f"/api/items/{iid}", json={"is_todo": True}))
+it = check("get single item", client.get(f"/api/items/{iid}"))
+assert it["is_todo"] is True, "is_todo 未生效"
 check("toggle done", client.patch(f"/api/items/{iid}", json={"done": True}))
 check("un-done", client.patch(f"/api/items/{iid}", json={"done": False}))
 check("star", client.patch(f"/api/items/{iid}", json={"starred": True}))
 check("remind", client.patch(f"/api/items/{iid}", json={"remind_at": "2030-01-01T09:30"}))
 check("bad remind ignored", client.patch(f"/api/items/{iid}", json={"remind_at": "abc"}))
 
-print("[3] 未完成事项顺延")
+print("[3] 未完成事项顺延（仅待办，笔记不动）")
 yesterday = "2020-01-01"
-r = client.post("/api/items", json={"date": yesterday, "content_html": "<p>旧待办</p>"})
-old = check("create past item", r, 201)
+r = client.post("/api/items", json={"date": yesterday, "content_html": "<p>旧待办</p>", "is_todo": True})
+old = check("create past todo", r, 201)
+r = client.post("/api/items", json={"date": yesterday, "content_html": "<p>旧笔记</p>"})
+note = check("create past note", r, 201)
 check("carry over (today view)", client.get(f"/api/day/{today}"))
 day_items = client.get(f"/api/day/{today}").get_json()["items"]
 assert any(i["id"] == old["id"] for i in day_items), "顺延失败"
+assert not any(i["id"] == note["id"] for i in day_items), "笔记不应顺延"
+old_day = client.get(f"/api/day/{yesterday}").get_json()["items"]
+assert any(i["id"] == note["id"] for i in old_day), "笔记应留在原日期"
 carried = [i for i in day_items if i["id"] == old["id"]][0]
 assert carried["carried_from"] == yesterday, "carried_from 未记录"
+old_id, note_id = old["id"], note["id"]
 
 print("[4] 清单")
 r = client.post("/api/lists", json={"name": "购物", "emoji": "🛒"})
@@ -172,9 +182,20 @@ assert hit, "PUT 后新文本未被搜索到"
 print("  PASS PUT 覆盖后搜索文本更新")
 globals()["ok"] = ok + 1
 
+print("[6e] 文件库")
+files = check("files", client.get("/api/files"))["files"]
+assert any(f["filename"] == "report.docx" for f in files), "文件库缺少附件"
+f0 = [f for f in files if f["filename"] == "notes.txt"][0]
+assert f0["item_id"] == iid and f0.get("item_preview"), "文件库缺少所属事项信息"
+r = client.get("/api/files?q=report")
+assert len(r.get_json()["files"]) >= 1, "文件名筛选失败"
+print("  PASS 文件库汇总与筛选")
+globals()["ok"] = ok + 1
+
 print("[7] 删除")
 check("delete item", client.delete(f"/api/items/{iid}"))
 check("delete old item", client.delete(f"/api/items/{old['id']}"))
+check("delete note", client.delete(f"/api/items/{note_id}"))
 check("delete list item", client.delete(f"/api/items/{li['id']}"))
 check("delete list", client.delete(f"/api/lists/{lid}"))
 

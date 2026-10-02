@@ -2,10 +2,11 @@
 const $ = s => document.querySelector(s);
 
 const state = {
-  view: 'day',        // day | calendar | lists | starred | search | list
+  view: 'day',        // day | calendar | lists | files | starred | search | list
   date: null,         // 当前查看的日期
   listId: null,       // 当前查看的清单
   query: '',
+  fileQuery: '',     // 文件库筛选
   lists: [],
   today: null,
   items: [],          // 当前视图的事项
@@ -76,6 +77,7 @@ function setView(view, param) {
   if (view === 'day') renderDay(state.date);
   else if (view === 'calendar') renderCalendar();
   else if (view === 'lists') renderLists();
+  else if (view === 'files') renderFiles();
   else if (view === 'starred') renderStarred();
   else if (view === 'search') renderSearch();
   else if (view === 'list') renderListItems(state.listId);
@@ -137,8 +139,10 @@ function renderItems() {
     return;
   }
   ul.innerHTML = state.items.map(it => `
-    <li class="item ${it.done ? 'done' : ''}" data-id="${it.id}">
-      <button class="check" title="完成">✓</button>
+    <li class="item ${it.done && it.is_todo ? 'done' : ''}" data-id="${it.id}">
+      ${it.is_todo
+        ? `<button class="check" title="完成/取消完成">✓</button>`
+        : `<button class="check note" title="转为待办">📝</button>`}
       <div class="body">
         <div class="text">${esc((it.content_text || '').split('\n')[0].slice(0, 120) || '（空）')}</div>
         <div class="meta">
@@ -170,7 +174,13 @@ function renderItems() {
     const id = +li.dataset.id;
     const item = state.items.find(i => i.id === id);
     li.querySelector('.check').onclick = async () => {
-      await api(`/api/items/${id}`, { method: 'PATCH', body: { done: !item.done } });
+      if (item.is_todo) {
+        await api(`/api/items/${id}`, { method: 'PATCH', body: { done: !item.done } });
+      } else {
+        // 笔记 -> 待办
+        await api(`/api/items/${id}`, { method: 'PATCH', body: { is_todo: true } });
+        toast('已转为待办');
+      }
       refreshCurrent();
     };
     li.querySelector('.star').onclick = async () => {
@@ -360,6 +370,63 @@ async function renderListItems(listId) {
   $('#quickInput').focus();
 }
 
+/* ---------------- 文件库 ---------------- */
+function fileIcon(name) {
+  const e = (String(name || '').split('.').pop() || '').toLowerCase();
+  if (e === 'pdf') return '📕';
+  if (['doc', 'docx', 'rtf', 'odt', 'txt', 'md'].includes(e)) return '📘';
+  if (['xls', 'xlsx', 'csv'].includes(e)) return '📗';
+  if (['ppt', 'pptx'].includes(e)) return '📙';
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(e)) return '🗜️';
+  if (['mp3', 'wav', 'flac', 'm4a'].includes(e)) return '🎵';
+  if (['mp4', 'mkv', 'mov', 'avi', 'webm'].includes(e)) return '🎬';
+  return '📄';
+}
+
+async function renderFiles() {
+  $('#viewTitle').textContent = '文件库';
+  $('#viewActions').innerHTML = '';
+  const q = state.fileQuery || '';
+  const data = await api('/api/files' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+  $('#view').innerHTML = `
+    <div class="search-bar">
+      <input type="text" id="fileSearch" placeholder="按文件名筛选…" value="${esc(q)}">
+      <button class="primary" id="btnFileSearch">筛选</button>
+    </div>
+    <div class="files-grid" id="filesGrid"></div>`;
+  drawFiles(data.files);
+  const doFilter = () => { state.fileQuery = $('#fileSearch').value.trim(); renderFiles(); };
+  $('#btnFileSearch').onclick = doFilter;
+  $('#fileSearch').addEventListener('keydown', e => { if (e.key === 'Enter') doFilter(); });
+}
+
+function drawFiles(files) {
+  const grid = $('#filesGrid');
+  if (!files.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1">文件库是空的<br>在事项编辑框里上传的图片和附件都会出现在这里</div>';
+    return;
+  }
+  grid.innerHTML = files.map(f => `
+    <div class="file-card" data-id="${f.id}">
+      <div class="fc-thumb" title="打开">${f.is_image
+        ? `<img src="${esc(attHref(f))}" loading="lazy">` : `<span>${fileIcon(f.filename)}</span>`}</div>
+      <div class="fc-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
+      <div class="fc-meta">${fmtSize(f.size)} · ${(f.created_at || '').slice(0, 10)}</div>
+      ${f.item_id ? `<button class="fc-item" data-item="${f.item_id}" title="查看所属事项">
+        🗒 ${(esc(f.item_preview) || '（空）')}</button>` : '<div class="fc-item none">未关联事项</div>'}
+    </div>`).join('');
+  grid.querySelectorAll('.file-card').forEach(card => {
+    const f = files.find(x => x.id === +card.dataset.id);
+    card.querySelector('.fc-thumb').onclick = () => openAttHref(attHref(f));
+    card.querySelector('.fc-name').onclick = () => openAttHref(attHref(f));
+    const btn = card.querySelector('.fc-item[data-item]');
+    if (btn) btn.onclick = async () => {
+      const item = await api(`/api/items/${btn.dataset.item}`);
+      openEditor(item);
+    };
+  });
+}
+
 /* ---------------- 星标 / 搜索 ---------------- */
 async function renderStarred() {
   $('#viewTitle').textContent = '星标事项';
@@ -403,9 +470,11 @@ function openEditor(item) {
   if (item) {
     editor.setHTML(item.content_html);
     $('#remindInput').value = item.remind_at ? item.remind_at.slice(0, 16) : '';
+    $('#isTodoCheck').checked = !!item.is_todo;
   } else {
     editor.setHTML('');
     $('#remindInput').value = '';
+    $('#isTodoCheck').checked = false;
   }
   // 移动目标
   const moveSel = $('#moveTarget');
@@ -446,6 +515,7 @@ async function saveEditor() {
     content_html: html,
     remind_at: $('#remindInput').value || null,
     attachment_ids: attIds,
+    is_todo: $('#isTodoCheck').checked,
   };
   const moveVal = $('#moveTarget').value;
   if (moveVal === 'day:pick') {

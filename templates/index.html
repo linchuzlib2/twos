@@ -14,6 +14,7 @@
       <a class="nav-item" data-view="day" href="javascript:void(0)">📅 今日清单</a>
       <a class="nav-item" data-view="calendar" href="javascript:void(0)">🗓 日历</a>
       <a class="nav-item" data-view="lists" href="javascript:void(0)">📋 我的清单</a>
+      <a class="nav-item" data-view="files" href="javascript:void(0)">📁 文件库</a>
       <a class="nav-item" data-view="starred" href="javascript:void(0)">⭐ 星标事项</a>
       <a class="nav-item" data-view="search" href="javascript:void(0)">🔍 搜索</a>
     </nav>
@@ -41,6 +42,12 @@
       <button class="icon-btn" id="editorClose" title="关闭">✕</button>
     </div>
     <div id="editorMount"></div>
+    <div class="modal-meta">
+      <label class="todo-label">
+        <input type="checkbox" id="isTodoCheck">
+        作为待办（显示完成勾选，未完成自动顺延到今天）
+      </label>
+    </div>
     <div class="modal-meta">
       <label>⏰ 提醒</label>
       <input type="datetime-local" id="remindInput">

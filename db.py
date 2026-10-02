@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS items (
     content_text TEXT DEFAULT '',
     done INTEGER DEFAULT 0,
     starred INTEGER DEFAULT 0,
+    is_todo INTEGER DEFAULT 0,
     remind_at TEXT,
     notified_at TEXT,
     carried_from TEXT,
@@ -95,6 +96,11 @@ def init_db():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(attachments)")}
         if cols and "extracted_text" not in cols:
             conn.execute("ALTER TABLE attachments ADD COLUMN extracted_text TEXT DEFAULT ''")
+        # 迁移：旧表补充 is_todo 列；存量事项保持原来的待办行为，新事项默认为笔记
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(items)")}
+        if cols and "is_todo" not in cols:
+            conn.execute("ALTER TABLE items ADD COLUMN is_todo INTEGER DEFAULT 0")
+            conn.execute("UPDATE items SET is_todo = 1")
         conn.commit()
     finally:
         conn.close()
@@ -116,13 +122,14 @@ def checkpoint():
 # ---------------------------------------------------------------- Twos 核心逻辑
 
 def carry_over_unfinished(today=None):
-    """未完成的待办自动顺延到今天（Twos 的核心逻辑），并记录原日期"""
+    """未完成的待办（is_todo）自动顺延到今天（Twos 的核心逻辑），并记录原日期。
+    普通笔记（非待办）留在原日期不动。"""
     today = today or today_cn()
     with get_db() as conn:
         cur = conn.execute(
             """UPDATE items SET carried_from = COALESCE(carried_from, date),
                       date = ?, updated_at = ?
-               WHERE date IS NOT NULL AND date < ? AND done = 0""",
+               WHERE date IS NOT NULL AND date < ? AND done = 0 AND is_todo = 1""",
             (today, now_cn(), today),
         )
         return cur.rowcount
