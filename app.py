@@ -4,6 +4,7 @@
 富文本编辑 + 一次上传多个附件/图片（直传阿里云 OSS）、SQLite 实时备份到 OSS。
 时间统一使用中国大陆时间（Asia/Shanghai）。
 """
+import hashlib
 import logging
 import os
 import re
@@ -31,6 +32,16 @@ app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 单次请求最多 500MB
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 
 
+# 附件全局令牌：必须跨 Render 多个实例保持一致。
+# 令牌从 SECRET_KEY 或 APP_PASSWORD 稳定派生；两者都没设置则站点公开，附件也无需令牌。
+if os.environ.get("SECRET_KEY") or APP_PASSWORD:
+    ATT_TOKEN = hashlib.sha256(
+        (os.environ.get("SECRET_KEY", "") + APP_PASSWORD).encode("utf-8")
+    ).hexdigest()[:32]
+else:
+    ATT_TOKEN = ""
+
+
 @app.before_request
 def auth_guard():
     if not APP_PASSWORD:
@@ -43,7 +54,7 @@ def auth_guard():
         return None
     if request.path.startswith("/att/"):
         tk = request.args.get("tk", "")
-        if tk and tk == session.get("att_token"):
+        if tk and tk == ATT_TOKEN:
             return None
         if request.method not in ("GET", "HEAD"):
             return "", 401
@@ -201,7 +212,7 @@ def att_file(att_id, fname=None):
 def attk_file(tk, att_id, fname=None):
     """带路径令牌的附件访问：本机 Office 打开/保存时没有浏览器会话，
     且会丢弃 URL 查询参数，所以令牌必须放在路径里。"""
-    if APP_PASSWORD and tk != session.get("att_token"):
+    if APP_PASSWORD and tk != ATT_TOKEN:
         abort(401)
     return att_file(att_id, fname)
 
@@ -296,13 +307,11 @@ def next_sort(conn, list_id=None, date=None):
 
 @app.route("/api/bootstrap")
 def api_bootstrap():
-    # 附件令牌：供本机 Office（WebDAV 保存）等无会话场景访问 /att/
-    session.setdefault("att_token", secrets.token_hex(16))
     return jsonify({
         "today": db.today_cn(),
         "now": db.now_cn(),
         "lists": all_lists(),
-        "att_token": session["att_token"],
+        "att_token": ATT_TOKEN,
         "auth": bool(session.get("auth")) or not APP_PASSWORD,
     })
 
