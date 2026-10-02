@@ -55,6 +55,18 @@ function createRichEditor(mount, options = {}) {
     }
   });
 
+  // 编辑框内：附件卡片单击打开；图片双击打开（单击用于选中编辑）
+  content.addEventListener('click', e => {
+    const a = e.target.closest('a.att-chip');
+    if (a) {
+      e.preventDefault();
+      window.open(a.href, '_blank');
+    }
+  });
+  content.addEventListener('dblclick', e => {
+    if (e.target.tagName === 'IMG') window.open(e.target.src, '_blank');
+  });
+
   function setStatus(t) { status.textContent = t || ''; }
 
   function insertHTML(html) {

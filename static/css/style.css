@@ -116,6 +116,7 @@ input, select, textarea { font: inherit; }
 .badge.carried { color: #92400e; background: #fef3c7; border-color: #fde68a; }
 .badge.atts { color: #065f46; background: #d1fae5; border-color: #a7f3d0; }
 .item .thumbs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.item .atts-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
 .item .thumbs img {
   width: 44px; height: 44px; object-fit: cover; border-radius: 6px;
   border: 1px solid var(--line); cursor: zoom-in;

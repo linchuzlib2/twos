@@ -151,6 +151,9 @@ function renderItems() {
         ${it.attachments.filter(a => a.is_image).length ? `
           <div class="thumbs">${it.attachments.filter(a => a.is_image).slice(0, 4).map(a =>
             `<img src="${esc(a.url)}" data-url="${esc(a.url)}" alt="${esc(a.filename)}">`).join('')}</div>` : ''}
+        ${it.attachments.filter(a => !a.is_image).length ? `
+          <div class="atts-row">${it.attachments.filter(a => !a.is_image).map(a =>
+            `<a class="att-chip" href="${esc(a.url)}" target="_blank">📎 ${esc(a.filename)}</a>`).join('')}</div>` : ''}
       </div>
       <button class="star ${it.starred ? 'on' : ''}" title="星标">★</button>
       <div class="order">

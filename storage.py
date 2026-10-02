@@ -68,6 +68,15 @@ def upload_bytes(key, data, content_type="application/octet-stream"):
     return key, "/local-files/" + key
 
 
+def read_bytes(key):
+    """读取对象内容（OSS 或本地降级目录）"""
+    if oss_configured():
+        return bucket().get_object(key).read()
+    path = os.path.join(LOCAL_FILES_DIR, key.replace("/", os.sep))
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def delete_key(key):
     try:
         if oss_configured():

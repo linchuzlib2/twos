@@ -77,6 +77,10 @@ r = client.post("/api/upload", data=data, content_type="multipart/form-data")
 up = check("upload image", r)
 att = up["attachments"][0]
 assert att["is_image"] and att["url"].startswith("/local-files/"), up
+r = client.get(f"/att/{att['id']}")
+assert r.status_code == 200 and r.data == b"hello image", f"附件代理访问失败: {r.status_code}"
+print("  PASS /att/<id> proxy")
+globals()["ok"] = ok + 1
 r = client.patch(f"/api/items/{iid}", json={
     "content_html": f'<p>带图</p><img src="{att["url"]}" data-att-id="{att["id"]}">',
     "attachment_ids": [att["id"]],

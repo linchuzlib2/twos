@@ -9,7 +9,9 @@ import os
 import re
 import secrets
 
-from flask import (Flask, abort, jsonify, render_template, request, send_from_directory, session)
+from urllib.parse import quote
+
+from flask import (Flask, Response, abort, jsonify, render_template, request, send_from_directory, session)
 
 import db
 import storage
@@ -71,6 +73,25 @@ def do_logout():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/att/<int:att_id>")
+def att_file(att_id):
+    """附件/图片代理访问：从 OSS（或本地）读取后返回，私有 Bucket 也能正常打开"""
+    with db.get_db() as conn:
+        row = conn.execute("SELECT * FROM attachments WHERE id = ?", (att_id,)).fetchone()
+    if not row:
+        abort(404)
+    try:
+        data = storage.read_bytes(row["oss_key"])
+    except Exception:
+        abort(404)
+    disposition = "inline" if row["is_image"] else "attachment"
+    resp = Response(data, content_type=row["content_type"] or "application/octet-stream")
+    resp.headers["Content-Disposition"] = (
+        f"{disposition}; filename*=UTF-8''{quote(row['filename'])}"
+    )
+    return resp
 
 
 @app.route("/local-files/<path:key>")
@@ -415,6 +436,10 @@ def api_upload():
                 (item_id, filename, key, url, len(data), content_type, is_image, db.now_cn()),
             )
             aid = cur.lastrowid
+            # 附件统一通过 /att/<id> 由服务器代理读取，Bucket 可保持私有
+            if storage.oss_configured():
+                conn.execute("UPDATE attachments SET url = ? WHERE id = ?", (f"/att/{aid}", aid))
+                url = f"/att/{aid}"
         results.append({
             "id": aid, "filename": filename, "url": url, "size": len(data),
             "content_type": content_type, "is_image": bool(is_image),
@@ -451,7 +476,21 @@ def too_large(e):
 
 # ---------------------------------------------------------------- 启动
 
+def migrate_attachment_urls():
+    """一次性迁移：把历史直链（OSS URL）替换为 /att/<id> 代理地址，私有 Bucket 也能访问"""
+    with db.get_db() as conn:
+        rows = conn.execute("SELECT id, url FROM attachments WHERE url LIKE 'http%'").fetchall()
+        for r in rows:
+            new_url = f"/att/{r['id']}"
+            conn.execute(
+                "UPDATE items SET content_html = REPLACE(content_html, ?, ?) WHERE content_html LIKE ?",
+                (r["url"], new_url, f"%{r['url']}%"),
+            )
+            conn.execute("UPDATE attachments SET url = ? WHERE id = ?", (new_url, r["id"]))
+
+
 db.init_db()
+migrate_attachment_urls()
 storage.restore_db_if_needed()
 storage.start_backup_thread()
 
