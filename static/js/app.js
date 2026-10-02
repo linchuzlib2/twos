@@ -147,7 +147,11 @@ function renderItems() {
           ${it.list_id ? `<span class="badge">${esc(listName(it.list_id))}</span>` : ''}
           ${it.date && state.view === 'list' ? `<span class="badge">${esc(it.date)}</span>` : ''}
           ${it.attachments.length ? `<span class="badge atts">📎 ${it.attachments.length} 个附件</span>` : ''}
+          ${it.attachments.filter(a => a.match).map(a =>
+            `<span class="badge atts">📄 命中附件：${esc(a.filename)}</span>`).join('')}
         </div>
+        ${it.attachments.filter(a => a.match && a.snippet).slice(0, 2).map(a =>
+          `<div class="snippet">${esc(a.snippet)}</div>`).join('')}
         ${it.attachments.filter(a => a.is_image).length ? `
           <div class="thumbs">${it.attachments.filter(a => a.is_image).slice(0, 4).map(a =>
             `<img src="${esc(attHref(a))}" data-url="${esc(attHref(a))}" alt="${esc(a.filename)}">`).join('')}</div>` : ''}
@@ -371,7 +375,7 @@ function renderSearch() {
   $('#viewActions').innerHTML = '';
   $('#view').innerHTML = `
     <div class="search-bar">
-      <input type="text" id="searchInput" placeholder="搜索所有事项…" autofocus>
+      <input type="text" id="searchInput" placeholder="搜索所有事项和附件内容…" autofocus>
       <button class="primary" id="btnSearch">搜索</button>
     </div>
     <ul class="items" id="itemList"></ul>`;

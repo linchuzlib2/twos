@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import uuid as _uuid
 
 from urllib.parse import quote
@@ -16,9 +17,11 @@ from flask import (Flask, Response, abort, jsonify, render_template, request, se
 from werkzeug.http import http_date
 
 import db
+import extract
 import storage
 
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("app")
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()  # 可选：访问密码，保护线上数据
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 单文件 100MB
@@ -35,10 +38,15 @@ def auth_guard():
     if session.get("auth"):
         return None
     # 附件访问：支持 ?tk= 令牌（本机 Office/WebDAV 保存时没有浏览器会话）
+    if request.path.startswith("/attk/"):
+        # 令牌在路径里，由 attk 视图校验（Office 会丢弃查询参数，所以令牌必须放路径）
+        return None
     if request.path.startswith("/att/"):
         tk = request.args.get("tk", "")
         if tk and tk == session.get("att_token"):
             return None
+        if request.method not in ("GET", "HEAD"):
+            return "", 401
     if request.path.startswith("/static") or request.path in ("/login", "/auth/login", "/healthz"):
         return None
     if request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json":
@@ -160,13 +168,14 @@ def att_file(att_id, fname=None):
         return "", 204
 
     if m == "PUT":
-        # 本机 Office 保存：覆盖 OSS 上的原文件
+        # 本机 Office 保存：覆盖 OSS 上的原文件，并重新提取搜索文本
         data = request.get_data()
         ctype = (request.content_type or row["content_type"] or "application/octet-stream").split(";")[0]
         storage.upload_bytes(row["oss_key"], data, ctype)
         with db.get_db() as conn:
             conn.execute("UPDATE attachments SET size = ?, content_type = ? WHERE id = ?",
                          (len(data), ctype, att_id))
+        extract_and_store(att_id, data, row["filename"])
         storage.mark_dirty()
         return "", 204
 
@@ -182,7 +191,19 @@ def att_file(att_id, fname=None):
     resp.headers["Content-Disposition"] = (
         f"{disposition}; filename*=UTF-8''{quote(row['filename'])}"
     )
+    resp.headers["Cache-Control"] = "no-store"  # 防止 Office/浏览器用旧缓存
     return resp
+
+
+@app.route("/attk/<tk>/<int:att_id>", methods=ATT_METHODS)
+@app.route("/attk/<tk>/<int:att_id>/", methods=ATT_METHODS)
+@app.route("/attk/<tk>/<int:att_id>/<path:fname>", methods=ATT_METHODS)
+def attk_file(tk, att_id, fname=None):
+    """带路径令牌的附件访问：本机 Office 打开/保存时没有浏览器会话，
+    且会丢弃 URL 查询参数，所以令牌必须放在路径里。"""
+    if APP_PASSWORD and tk != session.get("att_token"):
+        abort(401)
+    return att_file(att_id, fname)
 
 
 @app.route("/local-files/<path:key>")
@@ -207,8 +228,22 @@ def item_row_to_dict(row, with_attachments=True):
             atts = conn.execute(
                 "SELECT * FROM attachments WHERE item_id = ? ORDER BY id", (d["id"],)
             ).fetchall()
-        d["attachments"] = [dict(a) for a in atts]
+        d["attachments"] = []
+        for a in atts:
+            ad = dict(a)
+            ad.pop("extracted_text", None)
+            d["attachments"].append(ad)
     return d
+
+
+def extract_and_store(att_id, data, filename):
+    """提取附件文本（供全文搜索），失败静默"""
+    try:
+        text = extract.extract_text(data, filename)
+        with db.get_db() as conn:
+            conn.execute("UPDATE attachments SET extracted_text = ? WHERE id = ?", (text, att_id))
+    except Exception:
+        log.exception("附件文本提取失败 id=%s", att_id)
 
 
 def get_item_or_404(item_id):
@@ -477,17 +512,49 @@ def api_starred():
     return jsonify({"items": [item_row_to_dict(r) for r in rows]})
 
 
+def make_snippet(text, q):
+    """截取关键词附近的片段用于搜索结果展示"""
+    tl, ql = text.lower(), q.lower()
+    i = tl.find(ql)
+    if i < 0:
+        return ""
+    start = max(0, i - 30)
+    snippet = text[start:start + 100].replace("\n", " ").strip()
+    return ("…" if start > 0 else "") + snippet + "…"
+
+
 @app.route("/api/search")
 def api_search():
+    """全文搜索：匹配事项内容 + 附件提取出的文本内容"""
     q = (request.args.get("q") or "").strip()
     if not q:
         return jsonify({"items": []})
     like = f"%{q}%"
+    ql = q.lower()
     with db.get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM items WHERE content_text LIKE ? ORDER BY updated_at DESC LIMIT 100", (like,)
+            """SELECT * FROM items WHERE content_text LIKE ?
+               OR EXISTS (SELECT 1 FROM attachments a
+                          WHERE a.item_id = items.id AND a.extracted_text LIKE ?)
+               ORDER BY updated_at DESC LIMIT 100""",
+            (like, like),
         ).fetchall()
-    return jsonify({"items": [item_row_to_dict(r) for r in rows]})
+        result = []
+        for r in rows:
+            it = item_row_to_dict(r, with_attachments=False)
+            atts = []
+            for a in conn.execute(
+                "SELECT * FROM attachments WHERE item_id = ? ORDER BY id", (r["id"],)
+            ).fetchall():
+                ad = dict(a)
+                et = ad.pop("extracted_text", "") or ""
+                if ql in et.lower():
+                    ad["match"] = True
+                    ad["snippet"] = make_snippet(et, q)
+                atts.append(ad)
+            it["attachments"] = atts
+            result.append(it)
+    return jsonify({"items": result})
 
 
 @app.route("/api/reminders/due")
@@ -551,6 +618,7 @@ def api_upload():
                 # 附件统一通过 /att/<id> 由服务器代理读取，Bucket 可保持私有
                 conn.execute("UPDATE attachments SET url = ? WHERE id = ?", (f"/att/{aid}", aid))
                 url = f"/att/{aid}"
+        extract_and_store(aid, data, filename)  # 提取文本供全文搜索
         results.append({
             "id": aid, "filename": filename, "url": url, "size": len(data),
             "content_type": content_type, "is_image": bool(is_image),
@@ -600,10 +668,34 @@ def migrate_attachment_urls():
             conn.execute("UPDATE attachments SET url = ? WHERE id = ?", (new_url, r["id"]))
 
 
+def backfill_extraction():
+    """后台线程：为没有提取文本的存量附件补提文本（含从 OSS 恢复的老附件）"""
+    def run():
+        try:
+            with db.get_db() as conn:
+                rows = conn.execute(
+                    "SELECT id, filename, oss_key FROM attachments "
+                    "WHERE extracted_text IS NULL OR extracted_text = ''"
+                ).fetchall()
+            for r in rows:
+                try:
+                    data = storage.read_bytes(r["oss_key"])
+                    extract_and_store(r["id"], data, r["filename"])
+                except Exception:
+                    log.exception("存量附件文本提取失败 id=%s", r["id"])
+            if rows:
+                log.info("存量附件文本提取完成：%d 个", len(rows))
+        except Exception:
+            log.exception("存量附件文本提取任务失败")
+
+    threading.Thread(target=run, daemon=True, name="extract-backfill").start()
+
+
 db.init_db()
 migrate_attachment_urls()
 storage.restore_db_if_needed()
 storage.start_backup_thread()
+backfill_extraction()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)

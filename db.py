@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     size INTEGER DEFAULT 0,
     content_type TEXT DEFAULT '',
     is_image INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    extracted_text TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_att_item ON attachments(item_id);
 """
@@ -90,6 +91,10 @@ def init_db():
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        # 迁移：旧表补充 extracted_text 列
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(attachments)")}
+        if cols and "extracted_text" not in cols:
+            conn.execute("ALTER TABLE attachments ADD COLUMN extracted_text TEXT DEFAULT ''")
         conn.commit()
     finally:
         conn.close()

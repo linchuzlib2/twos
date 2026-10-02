@@ -117,6 +117,11 @@ input, select, textarea { font: inherit; }
 .badge.atts { color: #065f46; background: #d1fae5; border-color: #a7f3d0; }
 .item .thumbs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .item .atts-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.item .snippet {
+  margin-top: 4px; font-size: 13px; color: var(--muted);
+  background: var(--bg); border-radius: 6px; padding: 4px 8px;
+  word-break: break-all;
+}
 .item .thumbs img {
   width: 44px; height: 44px; object-fit: cover; border-radius: 6px;
   border: 1px solid var(--line); cursor: zoom-in;

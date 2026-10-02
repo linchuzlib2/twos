@@ -131,12 +131,12 @@ const OFFICE_PROTO = {
   ppt: 'ms-powerpoint', pptx: 'ms-powerpoint', odp: 'ms-powerpoint'
 };
 
-/* 附件访问地址：/att/<id>/<文件名>?tk=令牌（文件名用于让 Office 识别扩展名） */
+/* 附件访问地址：/attk/<令牌>/<id>/<文件名>
+   令牌放路径里（不放查询参数），否则本机 Office 打开/保存时会丢失导致鉴权失败 */
 function attHref(att) {
   if (!att.url.startsWith('/att/')) return att.url;  // 兼容旧的本地直链
-  let href = `${att.url}/${encodeURIComponent(att.filename)}`;
-  if (window.ATT_TOKEN) href += `?tk=${window.ATT_TOKEN}`;
-  return href;
+  const idPart = att.url.slice('/att/'.length).split(/[/?]/)[0];
+  return `/attk/${window.ATT_TOKEN || '0'}/${idPart}/${encodeURIComponent(att.filename)}`;
 }
 
 /* 打开附件：Office 文件用本地安装的 Word/Excel/PPT 打开（可编辑后 Ctrl+S 直接保存回服务器），

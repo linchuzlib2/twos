@@ -126,6 +126,52 @@ me = [i for i in item if i["id"] == iid][0]
 assert len(me["attachments"]) == 1, "附件未关联"
 check("delete attachment", client.delete(f"/api/attachments/{att['id']}"))
 
+print("[6d] 附件内容全文搜索")
+data = {"files": (io.BytesIO("会议纪要：量子加速器方案敲定".encode("utf-8")), "notes.txt", "text/plain"),
+        "item_id": str(iid)}
+r = client.post("/api/upload", data=data, content_type="multipart/form-data")
+up3 = check("upload txt", r)
+txt_att = up3["attachments"][0]
+r = client.get("/api/search?q=量子加速器")
+res = r.get_json()
+hit = [i for i in res["items"] if i["id"] == iid]
+assert hit, "附件内容未被搜索到"
+m = [a for a in hit[0]["attachments"] if a.get("match")]
+assert m and "量子加速器" in m[0]["snippet"], m
+print("  PASS txt 附件内容搜索命中")
+globals()["ok"] = ok + 1
+
+buf = io.BytesIO()
+import zipfile
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("word/document.xml",
+               "<w:body><w:p><w:r><w:t>季度预算budget1234元</w:t></w:r></w:p></w:body>")
+buf.seek(0)
+data = {"files": (buf, "report.docx",
+                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "item_id": str(iid)}
+r = client.post("/api/upload", data=data, content_type="multipart/form-data")
+up4 = check("upload docx", r)
+r = client.get("/api/search?q=budget1234")
+hit = [i for i in r.get_json()["items"] if i["id"] == iid]
+assert hit and any(a.get("match") for a in hit[0]["attachments"]), "docx 内容未被搜索到"
+print("  PASS docx 附件内容搜索命中")
+globals()["ok"] = ok + 1
+
+r = client.get(f"/attk/x/{txt_att['id']}/notes.txt")
+assert r.status_code == 200 and "量子加速器".encode() in r.data, r.status_code
+print("  PASS /attk 令牌路径访问")
+globals()["ok"] = ok + 1
+
+# PUT 覆盖后搜索文本应更新
+r = client.put(f"/attk/x/{txt_att['id']}/notes.txt", data="新的内容hyperdrive".encode("utf-8"))
+assert r.status_code == 204
+r = client.get("/api/search?q=hyperdrive")
+hit = [i for i in r.get_json()["items"] if i["id"] == iid]
+assert hit, "PUT 后新文本未被搜索到"
+print("  PASS PUT 覆盖后搜索文本更新")
+globals()["ok"] = ok + 1
+
 print("[7] 删除")
 check("delete item", client.delete(f"/api/items/{iid}"))
 check("delete old item", client.delete(f"/api/items/{old['id']}"))
