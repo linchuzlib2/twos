@@ -13,6 +13,7 @@ import threading
 import uuid as _uuid
 
 from urllib.parse import quote
+from xml.sax.saxutils import escape as xml_escape
 
 from flask import (Flask, Response, abort, jsonify, render_template, request, send_from_directory, session)
 from werkzeug.http import http_date
@@ -109,14 +110,23 @@ def _dav_prop_response(href, name, size, ctype, is_collection):
         "<D:resourcetype><D:collection/></D:resourcetype>"
         if is_collection else "<D:resourcetype/>"
     )
+    # WebDAV 规范：creationdate 必须是 ISO 8601；displayname 必须 XML 转义；Word 依赖 supportedlock 判断能否写入
+    created = db.now_cn().replace(" ", "T") + "+08:00"
+    display = xml_escape(str(name))
+    supportedlock = (
+        "<D:supportedlock><D:lockentry>"
+        "<D:lockscope><D:exclusive/></D:lockscope>"
+        "<D:locktype><D:write/></D:locktype>"
+        "</D:lockentry></D:supportedlock>"
+    )
     return (
-        f"<D:response><D:href>{href}</D:href><D:propstat><D:prop>"
-        f"<D:displayname>{quote(name)}</D:displayname>"
+        f"<D:response><D:href>{quote(href)}</D:href><D:propstat><D:prop>"
+        f"<D:displayname>{display}</D:displayname>"
         f"<D:getcontentlength>{size}</D:getcontentlength>"
         f"<D:getcontenttype>{ctype or 'application/octet-stream'}</D:getcontenttype>"
         f"<D:getlastmodified>{http_date()}</D:getlastmodified>"
-        f"<D:creationdate>{db.now_cn()}</D:creationdate>"
-        f"{resourcetype}"
+        f"<D:creationdate>{created}</D:creationdate>"
+        f"{resourcetype}{supportedlock}"
         "</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
     )
 
@@ -154,7 +164,7 @@ def att_file(att_id, fname=None):
         if is_collection and request.headers.get("Depth") == "1":
             # 列出集合里的文件本身
             parts.append(_dav_prop_response(
-                request.path + quote(row["filename"]), row["filename"],
+                request.path + "/" + row["filename"], row["filename"],
                 row["size"], row["content_type"], False))
         parts.append("</D:multistatus>")
         return Response("".join(parts), status=207, content_type='text/xml; charset="utf-8"')
