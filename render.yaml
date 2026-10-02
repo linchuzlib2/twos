@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: twos
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: APP_PASSWORD
+        sync: false
+      - key: OSS_ACCESS_KEY_ID
+        sync: false
+      - key: OSS_ACCESS_KEY_SECRET
+        sync: false
+      - key: OSS_BUCKET
+        sync: false
+      - key: OSS_ENDPOINT
+        sync: false
+      - key: OSS_PUBLIC_BASE_URL
+        sync: false
+      - key: OSS_DB_BACKUP_KEY
+        sync: false

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 - Twos</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+<div class="login-card">
+  <div class="login-logo">✌ Twos</div>
+  <p class="login-sub">把事情从脑子里清空</p>
+  <input type="password" id="pwd" placeholder="访问密码" autofocus>
+  <button class="primary block" id="loginBtn">进入</button>
+  <p class="login-err" id="err"></p>
+</div>
+<script>
+const btn = document.getElementById('loginBtn');
+const pwd = document.getElementById('pwd');
+const err = document.getElementById('err');
+async function login() {
+  err.textContent = '';
+  const res = await fetch('/auth/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: pwd.value})
+  });
+  if (res.ok) location.href = '/';
+  else err.textContent = '密码错误';
+}
+btn.onclick = login;
+pwd.onkeydown = e => { if (e.key === 'Enter') login(); };
+</script>
+</body>
+</html>

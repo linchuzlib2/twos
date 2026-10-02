@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twos - 把事情从脑子里清空</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">✌ Twos</div>
+    <nav class="nav">
+      <a class="nav-item" data-view="day" href="javascript:void(0)">📅 今日清单</a>
+      <a class="nav-item" data-view="calendar" href="javascript:void(0)">🗓 日历</a>
+      <a class="nav-item" data-view="lists" href="javascript:void(0)">📋 我的清单</a>
+      <a class="nav-item" data-view="starred" href="javascript:void(0)">⭐ 星标事项</a>
+      <a class="nav-item" data-view="search" href="javascript:void(0)">🔍 搜索</a>
+    </nav>
+    <div class="lists-nav" id="listsNav"></div>
+    <div class="sidebar-footer">
+      <div id="todayLabel"></div>
+      <button class="link-btn hidden" id="logoutBtn">退出登录</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <h1 id="viewTitle"></h1>
+      <div class="view-actions" id="viewActions"></div>
+    </header>
+    <div id="view" class="view"></div>
+  </main>
+</div>
+
+<!-- 事项编辑弹窗（富文本） -->
+<div class="modal-mask hidden" id="editorModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span id="editorTitle">编辑事项</span>
+      <button class="icon-btn" id="editorClose" title="关闭">✕</button>
+    </div>
+    <div id="editorMount"></div>
+    <div class="modal-meta">
+      <label>⏰ 提醒</label>
+      <input type="datetime-local" id="remindInput">
+      <button class="link-btn" id="clearRemind">清除</button>
+    </div>
+    <div class="modal-meta">
+      <label>📦 移动到</label>
+      <select id="moveTarget"></select>
+      <input type="date" id="moveDate" class="hidden">
+    </div>
+    <div class="modal-foot">
+      <button class="danger" id="btnDeleteItem">删除</button>
+      <button class="primary" id="btnSaveItem">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="/static/js/editor.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
